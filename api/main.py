@@ -1,5 +1,5 @@
 # main.py
-# Version 19.0: Final Production (Robust + 3-Column + Exact Tweet)
+# Version 21.0: Removed Global Sentiment + Cleaned Layout
 
 import os
 import json
@@ -14,9 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
-# FIX: Use absolute path to ensure image saves correctly in cloud
 OUTPUT_FILE = os.path.join(os.path.dirname(__file__), "global_market_update.png")
-# Fonts must be in the same folder as this script (api/ folder)
 FONT_PATH = "arial.ttf"
 WIDTH, HEIGHT = 1080, 1080
 
@@ -40,15 +38,12 @@ print("1. Initializing...")
 
 # --- GRAPHICS HELPERS ---
 def get_font(size, bold=False):
-    # Try to load font from the same directory as the script
     script_dir = os.path.dirname(__file__)
     font_name = "arialbd.ttf" if bold else "arial.ttf"
     font_path = os.path.join(script_dir, font_name)
-    
     try:
         return ImageFont.truetype(font_path, size)
     except Exception as e:
-        # Fallback if font is missing
         return ImageFont.load_default()
 
 def draw_text(draw, pos, text, font, fill, anchor="mm"):
@@ -68,11 +63,12 @@ def draw_card_compact(draw, x, y, w, h, title, value, change_str):
 
     draw.text((x + 15, y + 15), title, font=get_font(18, bold=True), fill=COLOR_TEXT_SUB, anchor="lt")
     draw.text((x + 15, y + 45), value, font=get_font(34, bold=True), fill=COLOR_TEXT_MAIN, anchor="lt")
+    
     clean_change = change_str.replace('+', '').replace('-', '')
     full_text = f"{arrow} {clean_change}"
     draw.text((x + w - 15, y + 48), full_text, font=get_font(26, bold=True), fill=accent, anchor="rt")
 
-# --- ROBUST DATA FETCHERS ---
+# --- DATA FETCHERS ---
 def get_robust_session():
     session = requests.Session()
     session.headers.update({
@@ -155,17 +151,16 @@ def fetch_gift_nifty_live():
         return "N/A", "0.00%"
 
 def fetch_market_data():
-    # ROBUST VERSION: Handles empty data/holidays without crashing
     data = {}
     data["GIFTNIFTY"] = fetch_gift_nifty_live()
     
     indices = {
         "Nikkei 225": "^N225",
-        "Dow Jones Fut": "YM=F",
+        "Dow Futures": "YM=F",
         "S&P 500": "^GSPC",
         "Nasdaq": "^IXIC",
         "Hang Seng": "^HSI",
-        "Gold (Fut)": "GC=F",
+        "Gold Futures": "GC=F",
         "Bitcoin": "BTC-USD"
     }
     
@@ -173,12 +168,9 @@ def fetch_market_data():
         print(f"   Fetching {name}...")
         try:
             t = yf.Ticker(ticker)
-            # Fetch 5 days to be safe
             hist = t.history(period="5d")
-            
-            # --- FIX: Drop NaN (empty) rows ---
             close_data = hist["Close"].dropna()
-
+            
             if len(close_data) < 2:
                 print(f"      ⚠️ Not enough data for {name}")
                 data[name] = ("N/A", "0.00%")
@@ -196,30 +188,18 @@ def fetch_market_data():
             
     return data
 
-def calc_market_bias(data):
-    green = 0
-    total = 0
-    for key, val in data.items():
-        chg_str = val[1]
-        if chg_str.startswith("+") and "0.00" not in chg_str:
-            green += 1
-        total += 1
-    ratio = green / total if total > 0 else 0
-    if ratio >= 0.6: return "BULLISH", COLOR_GREEN
-    if ratio <= 0.4: return "BEARISH", COLOR_RED
-    return "NEUTRAL", COLOR_NEUTRAL
-
 def create_image(data, ban_list, high_low_data):
-    print("3. Generating Image (3-Column Layout)...")
+    print("3. Generating Image (V21 - No Sentiment)...")
     img = Image.new("RGB", (WIDTH, HEIGHT), COLOR_BG)
     d = ImageDraw.Draw(img)
 
     draw_text(d, (WIDTH / 2, 70), "Global Market Update", get_font(72, bold=True), HEADER_TEXT_COLOR)
     draw_text(d, (WIDTH / 2, 135), datetime.now().strftime("%d %b, %Y"), get_font(42), HEADER_DATE_COLOR)
     
-    bias_text, bias_color = calc_market_bias(data)
-    draw_text(d, (60, 185), f"MARKET BIAS: {bias_text}", get_font(28, bold=True), bias_color, anchor="lm")
-    draw_text(d, (WIDTH - 60, 185), "Live Data | F&O Update", get_font(22), COLOR_ACCENT, anchor="rm")
+    # REMOVED: Global Sentiment
+    # MOVED: "Market Data" to the Left side to serve as the section header
+    draw_text(d, (60, 185), "MARKET DATA", get_font(22, bold=True), COLOR_ACCENT, anchor="lm")
+    
     d.line([(50, 210), (WIDTH - 50, 210)], fill=COLOR_CARD, width=2)
 
     start_y = 230
@@ -228,7 +208,8 @@ def create_image(data, ban_list, high_low_data):
     card_w = 480
     card_h = 100
     gap_y = 20
-    order = ["GIFTNIFTY", "Nikkei 225", "Dow Jones Fut", "S&P 500", "Nasdaq", "Hang Seng", "Gold (Fut)", "Bitcoin"]
+    
+    order = ["GIFTNIFTY", "Nikkei 225", "Dow Futures", "S&P 500", "Nasdaq", "Hang Seng", "Gold Futures", "Bitcoin"]
     
     last_y = 0
     for i, key in enumerate(order):
@@ -237,10 +218,11 @@ def create_image(data, ban_list, high_low_data):
         col = i % 2
         x = col_1_x if col == 0 else col_2_x
         y = start_y + (row * (card_h + gap_y))
+        
         draw_card_compact(d, x, y, card_w, card_h, key.upper(), val, chg)
         last_y = y + card_h
 
-    # Bottom Section (3 Columns)
+    # Bottom Section
     bottom_y = last_y + 45
     col1_x, col2_x, col3_x = 60, 420, 760
     
@@ -254,11 +236,11 @@ def create_image(data, ban_list, high_low_data):
             draw_text(d, (col1_x, ban_curr_y), f"• {item}", get_font(24), COLOR_TEXT_MAIN, anchor="lt")
             ban_curr_y += 35
         if len(ban_list) > 5:
-             draw_text(d, (col1_x, ban_curr_y), f"+ {len(ban_list)-5} more", get_font(22), COLOR_TEXT_SUB, anchor="lt")
+             draw_text(d, (col1_x, ban_curr_y), f"+{len(ban_list)-5} others", get_font(22), COLOR_TEXT_SUB, anchor="lt")
 
     # 2. Highs
     highs = high_low_data.get('highs', [])
-    draw_text(d, (col2_x, bottom_y), f"52W HIGHS ({len(highs)})", get_font(24, bold=True), COLOR_HIGH, anchor="lt")
+    draw_text(d, (col2_x, bottom_y), f"52-Week HIGHS ({len(highs)})", get_font(24, bold=True), COLOR_HIGH, anchor="lt")
     high_curr_y = bottom_y + 40
     if not highs:
         draw_text(d, (col2_x, high_curr_y), "None", get_font(24), COLOR_TEXT_MAIN, anchor="lt")
@@ -267,11 +249,11 @@ def create_image(data, ban_list, high_low_data):
             draw_text(d, (col2_x, high_curr_y), f"▲ {item}", get_font(24), COLOR_TEXT_MAIN, anchor="lt")
             high_curr_y += 35
         if len(highs) > 5:
-             draw_text(d, (col2_x, high_curr_y), f"+ {len(highs)-5} more", get_font(22), COLOR_TEXT_SUB, anchor="lt")
+             draw_text(d, (col2_x, high_curr_y), f"+{len(highs)-5} others", get_font(22), COLOR_TEXT_SUB, anchor="lt")
 
     # 3. Lows
     lows = high_low_data.get('lows', [])
-    draw_text(d, (col3_x, bottom_y), f"52W LOWS ({len(lows)})", get_font(24, bold=True), COLOR_NEUTRAL, anchor="lt")
+    draw_text(d, (col3_x, bottom_y), f"52-Week LOWS ({len(lows)})", get_font(24, bold=True), COLOR_NEUTRAL, anchor="lt")
     low_curr_y = bottom_y + 40
     if not lows:
         draw_text(d, (col3_x, low_curr_y), "None", get_font(24), COLOR_TEXT_MAIN, anchor="lt")
@@ -280,7 +262,7 @@ def create_image(data, ban_list, high_low_data):
             draw_text(d, (col3_x, low_curr_y), f"▼ {item}", get_font(24), COLOR_TEXT_MAIN, anchor="lt")
             low_curr_y += 35
         if len(lows) > 5:
-             draw_text(d, (col3_x, low_curr_y), f"+ {len(lows)-5} more", get_font(22), COLOR_TEXT_SUB, anchor="lt")
+             draw_text(d, (col3_x, low_curr_y), f"+{len(lows)-5} others", get_font(22), COLOR_TEXT_SUB, anchor="lt")
 
     # Footer
     date_str_watermark = datetime.now().strftime("%d-%b-%Y")
@@ -314,22 +296,20 @@ def post_to_twitter(image_path, data):
             access_token=access_token, access_token_secret=access_secret
         )
         
-        # --- EXACT TWEET TEXT FORMAT ---
+        # --- TWEET TEXT ---
         date_str = datetime.now().strftime('%d %b, %Y')
         tweet_text = f"Global Market Update – {date_str}\n\n"
         
-        # Display Mapping (Key -> Display Name)
         display_map = {
             "GIFTNIFTY": "GIFTNIFTY",
             "Nikkei 225": "Nikkei 225",
-            "Dow Jones Fut": "Dow Jones Futures",
+            "Dow Futures": "Dow Futures",
             "S&P 500": "S&P 500",
             "Nasdaq": "Nasdaq",
             "Hang Seng": "Hang Seng"
         }
         
-        # Loop specific keys
-        key_order = ["GIFTNIFTY", "Nikkei 225", "Dow Jones Fut", "S&P 500", "Nasdaq", "Hang Seng"]
+        key_order = ["GIFTNIFTY", "Nikkei 225", "Dow Futures", "S&P 500", "Nasdaq", "Hang Seng"]
         
         for key in key_order:
             if key in data:
@@ -337,9 +317,7 @@ def post_to_twitter(image_path, data):
                 name = display_map.get(key, key)
                 tweet_text += f"{name}: {val} ({chg})\n"
                 
-        # Hashtags
         tweet_text += "\n#GIFTNIFTY #Nifty #DowJones #Nasdaq $bitcoin"
-        # -----------------------------
 
         client.create_tweet(text=tweet_text, media_ids=[media.media_id_string])
         print("🚀 Tweet Posted Successfully!")
@@ -348,7 +326,7 @@ def post_to_twitter(image_path, data):
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("--- STARTING CLOUD AUTOMATION (V19) ---")
+    print("--- STARTING CLOUD AUTOMATION (V21) ---")
     m_data = fetch_market_data()
     fno_list = fetch_fo_ban_list()
     hl_data = fetch_52wk_data()
