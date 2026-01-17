@@ -1,5 +1,5 @@
 # main.py
-# Version 18.0: Final Layout + Exact Tweet Format
+# Version 19.0: Final Production (Robust + 3-Column + Exact Tweet)
 
 import os
 import json
@@ -14,7 +14,8 @@ from PIL import Image, ImageDraw, ImageFont
 from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
-OUTPUT_FILE = "global_market_update.png"
+# FIX: Use absolute path to ensure image saves correctly in cloud
+OUTPUT_FILE = os.path.join(os.path.dirname(__file__), "global_market_update.png")
 # Fonts must be in the same folder as this script (api/ folder)
 FONT_PATH = "arial.ttf"
 WIDTH, HEIGHT = 1080, 1080
@@ -39,9 +40,13 @@ print("1. Initializing...")
 
 # --- GRAPHICS HELPERS ---
 def get_font(size, bold=False):
-    font_file = "arialbd.ttf" if bold else "arial.ttf"
+    # Try to load font from the same directory as the script
+    script_dir = os.path.dirname(__file__)
+    font_name = "arialbd.ttf" if bold else "arial.ttf"
+    font_path = os.path.join(script_dir, font_name)
+    
     try:
-        return ImageFont.truetype(font_file, size)
+        return ImageFont.truetype(font_path, size)
     except Exception as e:
         # Fallback if font is missing
         return ImageFont.load_default()
@@ -67,7 +72,7 @@ def draw_card_compact(draw, x, y, w, h, title, value, change_str):
     full_text = f"{arrow} {clean_change}"
     draw.text((x + w - 15, y + 48), full_text, font=get_font(26, bold=True), fill=accent, anchor="rt")
 
-# --- DATA FETCHERS (CLOUD SAFE) ---
+# --- ROBUST DATA FETCHERS ---
 def get_robust_session():
     session = requests.Session()
     session.headers.update({
@@ -80,7 +85,6 @@ def get_robust_session():
 def fetch_fo_ban_list():
     print("   Fetching F&O Ban List...")
     session = get_robust_session()
-    # Check last 5 days
     for i in range(5):
         dt = datetime.now() - timedelta(days=i)
         date_str = dt.strftime("%d%m%Y")
@@ -151,10 +155,10 @@ def fetch_gift_nifty_live():
         return "N/A", "0.00%"
 
 def fetch_market_data():
+    # ROBUST VERSION: Handles empty data/holidays without crashing
     data = {}
     data["GIFTNIFTY"] = fetch_gift_nifty_live()
     
-    # yfinance tickers
     indices = {
         "Nikkei 225": "^N225",
         "Dow Jones Fut": "YM=F",
@@ -169,11 +173,23 @@ def fetch_market_data():
         print(f"   Fetching {name}...")
         try:
             t = yf.Ticker(ticker)
+            # Fetch 5 days to be safe
             hist = t.history(period="5d")
-            curr = hist["Close"].iloc[-1]
-            prev = hist["Close"].iloc[-2]
+            
+            # --- FIX: Drop NaN (empty) rows ---
+            close_data = hist["Close"].dropna()
+
+            if len(close_data) < 2:
+                print(f"      ⚠️ Not enough data for {name}")
+                data[name] = ("N/A", "0.00%")
+                continue
+
+            curr = close_data.iloc[-1]
+            prev = close_data.iloc[-2]
+            
             chg = ((curr - prev) / prev) * 100
             data[name] = (f"{curr:,.2f}", f"{chg:+.2f}%")
+            
         except Exception as e:
             print(f"   Error fetching {name}: {e}")
             data[name] = ("N/A", "0.00%")
@@ -298,14 +314,11 @@ def post_to_twitter(image_path, data):
             access_token=access_token, access_token_secret=access_secret
         )
         
-        # --- FORMATTED TWEET LOGIC ---
-        
-        # 1. Header (Global Market Update – 17 Jan, 2026)
+        # --- EXACT TWEET TEXT FORMAT ---
         date_str = datetime.now().strftime('%d %b, %Y')
         tweet_text = f"Global Market Update – {date_str}\n\n"
         
-        # 2. List Items
-        # Define exact order and display names
+        # Display Mapping (Key -> Display Name)
         display_map = {
             "GIFTNIFTY": "GIFTNIFTY",
             "Nikkei 225": "Nikkei 225",
@@ -315,7 +328,7 @@ def post_to_twitter(image_path, data):
             "Hang Seng": "Hang Seng"
         }
         
-        # We loop through the exact list requested
+        # Loop specific keys
         key_order = ["GIFTNIFTY", "Nikkei 225", "Dow Jones Fut", "S&P 500", "Nasdaq", "Hang Seng"]
         
         for key in key_order:
@@ -324,7 +337,7 @@ def post_to_twitter(image_path, data):
                 name = display_map.get(key, key)
                 tweet_text += f"{name}: {val} ({chg})\n"
                 
-        # 3. Hashtags
+        # Hashtags
         tweet_text += "\n#GIFTNIFTY #Nifty #DowJones #Nasdaq $bitcoin"
         # -----------------------------
 
@@ -335,7 +348,7 @@ def post_to_twitter(image_path, data):
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("--- STARTING CLOUD AUTOMATION ---")
+    print("--- STARTING CLOUD AUTOMATION (V19) ---")
     m_data = fetch_market_data()
     fno_list = fetch_fo_ban_list()
     hl_data = fetch_52wk_data()
