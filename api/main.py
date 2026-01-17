@@ -1,5 +1,5 @@
 # main.py
-# Automated Daily Market Update (V16 + Twitter)
+# Version 17.0: Cloud-Safe (No TvDatafeed) + Robust Error Handling
 
 import os
 import json
@@ -7,15 +7,15 @@ import requests
 import textwrap
 import csv
 import io
-import tweepy  # Added for Twitter
+import tweepy
+import yfinance as yf
 from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
-from tvDatafeed import TvDatafeed, Interval
 from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
 OUTPUT_FILE = "global_market_update.png"
-# Font: We will assume the font file is in the same folder
+# Fonts must be in the same folder as this script
 FONT_PATH = "arial.ttf"
 WIDTH, HEIGHT = 1080, 1080
 
@@ -36,15 +36,14 @@ HEADER_DATE_COLOR = (180, 180, 200)
 WATERMARK_COLOR   = "#D1D5DB" 
 
 print("1. Initializing...")
-tv = TvDatafeed()
 
 # --- GRAPHICS HELPERS ---
 def get_font(size, bold=False):
     font_file = "arialbd.ttf" if bold else "arial.ttf"
     try:
         return ImageFont.truetype(font_file, size)
-    except:
-        # Fallback to default if font file is missing in cloud
+    except Exception as e:
+        print(f"⚠️ Font error: {e}. Using default.")
         return ImageFont.load_default()
 
 def draw_text(draw, pos, text, font, fill, anchor="mm"):
@@ -72,14 +71,10 @@ def draw_card_compact(draw, x, y, w, h, title, value, change_str):
 def get_robust_session():
     session = requests.Session()
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0',
         'Referer': 'https://www.nseindia.com/',
         'Accept': '*/*'
     })
-    try:
-        session.get("https://www.nseindia.com/", timeout=5)
-    except:
-        pass
     return session
 
 def fetch_fo_ban_list():
@@ -98,7 +93,7 @@ def fetch_fo_ban_list():
                     if line.strip():
                         parts = line.split(',')
                         if len(parts) >= 2: ban_list.append(parts[1].strip())
-                if ban_list: return ban_list
+                return ban_list
         except:
             continue
     return []
@@ -157,38 +152,31 @@ def fetch_gift_nifty_live():
 def fetch_market_data():
     data = {}
     data["GIFTNIFTY"] = fetch_gift_nifty_live()
+    
+    # Using YFINANCE for everything (More stable for Cloud)
     indices = {
-        "Nikkei 225": ({"symbol": "NI225", "exchange": "TVC"}, "^N225"),
-        "Dow Jones Fut": ({"symbol": "YM1!", "exchange": "CBOT"}, "YM=F"),
-        "S&P 500": ({"symbol": "SPX", "exchange": "TVC"}, "^GSPC"),
-        "Nasdaq": ({"symbol": "IXIC", "exchange": "TVC"}, "^IXIC"),
-        "Hang Seng": ({"symbol": "HSI", "exchange": "TVC"}, "^HSI"),
-        "Gold (Fut)": ({"symbol": "GC1!", "exchange": "COMEX"}, "GC=F"),
-        "Bitcoin": ({"symbol": "BTCUSD", "exchange": "CRYPTO"}, "BTC-USD")
+        "Nikkei 225": "^N225",
+        "Dow Jones Fut": "YM=F",
+        "S&P 500": "^GSPC",
+        "Nasdaq": "^IXIC",
+        "Hang Seng": "^HSI",
+        "Gold (Fut)": "GC=F",
+        "Bitcoin": "BTC-USD"
     }
-    for name, (tv_conf, yf_sym) in indices.items():
+    
+    for name, ticker in indices.items():
         print(f"   Fetching {name}...")
-        fetched = False
         try:
-            hist = tv.get_hist(symbol=tv_conf['symbol'], exchange=tv_conf['exchange'], interval=Interval.in_daily, n_bars=5)
-            if hist is not None and not hist.empty:
-                curr = hist['close'].iloc[-1]
-                prev = hist['close'].iloc[-2]
-                chg = ((curr - prev) / prev) * 100
-                data[name] = (f"{curr:,.2f}", f"{chg:+.2f}%")
-                fetched = True
-        except:
-            pass
-        if not fetched:
-            try:
-                t = yf.Ticker(yf_sym)
-                hist = t.history(period="5d")
-                curr = hist["Close"].iloc[-1]
-                prev = hist["Close"].iloc[-2]
-                chg = ((curr - prev) / prev) * 100
-                data[name] = (f"{curr:,.2f}", f"{chg:+.2f}%")
-            except:
-                data[name] = ("N/A", "0.00%")
+            t = yf.Ticker(ticker)
+            hist = t.history(period="5d")
+            curr = hist["Close"].iloc[-1]
+            prev = hist["Close"].iloc[-2]
+            chg = ((curr - prev) / prev) * 100
+            data[name] = (f"{curr:,.2f}", f"{chg:+.2f}%")
+        except Exception as e:
+            print(f"   Error fetching {name}: {e}")
+            data[name] = ("N/A", "0.00%")
+            
     return data
 
 def calc_market_bias(data):
@@ -289,7 +277,6 @@ def create_image(data, ban_list, high_low_data):
 def post_to_twitter(image_path, data):
     print("4. Posting to Twitter...")
     
-    # Retrieve Keys from Cloud Environment Variables (Secure)
     api_key = os.environ.get("TWITTER_API_KEY")
     api_secret = os.environ.get("TWITTER_API_SECRET")
     access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
@@ -300,18 +287,15 @@ def post_to_twitter(image_path, data):
         return
 
     try:
-        # V1.1 for Media Upload
         auth = tweepy.OAuth1UserHandler(api_key, api_secret, access_token, access_secret)
         api = tweepy.API(auth)
         media = api.media_upload(image_path)
 
-        # V2 for Tweeting
         client = tweepy.Client(
             consumer_key=api_key, consumer_secret=api_secret,
             access_token=access_token, access_token_secret=access_secret
         )
         
-        # Compose Tweet Text
         bias, _ = calc_market_bias(data)
         gift_val = data.get("GIFTNIFTY", ("N/A", "0%"))[0]
         tweet_text = f"Global Market Update – {datetime.now().strftime('%d %b')}\n\n"
@@ -333,7 +317,6 @@ if __name__ == "__main__":
     
     img_path = create_image(m_data, fno_list, hl_data)
     
-    # Only try to tweet if keys exist (prevents local crash)
     if os.environ.get("TWITTER_API_KEY"):
         post_to_twitter(img_path, m_data)
     else:
