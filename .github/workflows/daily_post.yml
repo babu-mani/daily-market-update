@@ -1,0 +1,34 @@
+name: Daily Market Update
+
+on:
+  schedule:
+    # Runs at 03:15 UTC (which is 8:45 AM IST)
+    - cron: '15 3 * * *'
+  workflow_dispatch: # Allows you to run it manually to test
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install git+https://github.com/rongardF/tvdatafeed.git
+
+      - name: Run Script
+        env:
+          TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+          TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
+          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
+        working-directory: ./api
+        run: python main.py
