@@ -1,0 +1,7 @@
+requests
+yfinance
+tweepy
+Pillow
+tvdatafeed
+beautifulsoup4
+lxml
