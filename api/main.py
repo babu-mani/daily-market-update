@@ -1,5 +1,5 @@
 # main.py
-# Version 17.0: Cloud-Safe (No TvDatafeed) + Robust Error Handling
+# Version 18.0: Final Layout + Exact Tweet Format
 
 import os
 import json
@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
 OUTPUT_FILE = "global_market_update.png"
-# Fonts must be in the same folder as this script
+# Fonts must be in the same folder as this script (api/ folder)
 FONT_PATH = "arial.ttf"
 WIDTH, HEIGHT = 1080, 1080
 
@@ -43,7 +43,7 @@ def get_font(size, bold=False):
     try:
         return ImageFont.truetype(font_file, size)
     except Exception as e:
-        print(f"⚠️ Font error: {e}. Using default.")
+        # Fallback if font is missing
         return ImageFont.load_default()
 
 def draw_text(draw, pos, text, font, fill, anchor="mm"):
@@ -67,7 +67,7 @@ def draw_card_compact(draw, x, y, w, h, title, value, change_str):
     full_text = f"{arrow} {clean_change}"
     draw.text((x + w - 15, y + 48), full_text, font=get_font(26, bold=True), fill=accent, anchor="rt")
 
-# --- DATA FETCHERS ---
+# --- DATA FETCHERS (CLOUD SAFE) ---
 def get_robust_session():
     session = requests.Session()
     session.headers.update({
@@ -80,6 +80,7 @@ def get_robust_session():
 def fetch_fo_ban_list():
     print("   Fetching F&O Ban List...")
     session = get_robust_session()
+    # Check last 5 days
     for i in range(5):
         dt = datetime.now() - timedelta(days=i)
         date_str = dt.strftime("%d%m%Y")
@@ -153,7 +154,7 @@ def fetch_market_data():
     data = {}
     data["GIFTNIFTY"] = fetch_gift_nifty_live()
     
-    # Using YFINANCE for everything (More stable for Cloud)
+    # yfinance tickers
     indices = {
         "Nikkei 225": "^N225",
         "Dow Jones Fut": "YM=F",
@@ -193,7 +194,7 @@ def calc_market_bias(data):
     return "NEUTRAL", COLOR_NEUTRAL
 
 def create_image(data, ban_list, high_low_data):
-    print("3. Generating Image...")
+    print("3. Generating Image (3-Column Layout)...")
     img = Image.new("RGB", (WIDTH, HEIGHT), COLOR_BG)
     d = ImageDraw.Draw(img)
 
@@ -223,10 +224,11 @@ def create_image(data, ban_list, high_low_data):
         draw_card_compact(d, x, y, card_w, card_h, key.upper(), val, chg)
         last_y = y + card_h
 
+    # Bottom Section (3 Columns)
     bottom_y = last_y + 45
     col1_x, col2_x, col3_x = 60, 420, 760
     
-    # F&O BAN
+    # 1. Ban List
     draw_text(d, (col1_x, bottom_y), "F&O BAN LIST", get_font(24, bold=True), COLOR_BAN, anchor="lt")
     ban_curr_y = bottom_y + 40
     if not ban_list:
@@ -238,7 +240,7 @@ def create_image(data, ban_list, high_low_data):
         if len(ban_list) > 5:
              draw_text(d, (col1_x, ban_curr_y), f"+ {len(ban_list)-5} more", get_font(22), COLOR_TEXT_SUB, anchor="lt")
 
-    # HIGHS
+    # 2. Highs
     highs = high_low_data.get('highs', [])
     draw_text(d, (col2_x, bottom_y), f"52W HIGHS ({len(highs)})", get_font(24, bold=True), COLOR_HIGH, anchor="lt")
     high_curr_y = bottom_y + 40
@@ -251,7 +253,7 @@ def create_image(data, ban_list, high_low_data):
         if len(highs) > 5:
              draw_text(d, (col2_x, high_curr_y), f"+ {len(highs)-5} more", get_font(22), COLOR_TEXT_SUB, anchor="lt")
 
-    # LOWS
+    # 3. Lows
     lows = high_low_data.get('lows', [])
     draw_text(d, (col3_x, bottom_y), f"52W LOWS ({len(lows)})", get_font(24, bold=True), COLOR_NEUTRAL, anchor="lt")
     low_curr_y = bottom_y + 40
@@ -296,12 +298,35 @@ def post_to_twitter(image_path, data):
             access_token=access_token, access_token_secret=access_secret
         )
         
-        bias, _ = calc_market_bias(data)
-        gift_val = data.get("GIFTNIFTY", ("N/A", "0%"))[0]
-        tweet_text = f"Global Market Update – {datetime.now().strftime('%d %b')}\n\n"
-        tweet_text += f"📊 Market Bias: {bias}\n"
-        tweet_text += f"🌏 GIFT Nifty: {gift_val}\n\n"
-        tweet_text += "#StockMarket #Nifty #Trading #ChartWizMani"
+        # --- FORMATTED TWEET LOGIC ---
+        
+        # 1. Header (Global Market Update – 17 Jan, 2026)
+        date_str = datetime.now().strftime('%d %b, %Y')
+        tweet_text = f"Global Market Update – {date_str}\n\n"
+        
+        # 2. List Items
+        # Define exact order and display names
+        display_map = {
+            "GIFTNIFTY": "GIFTNIFTY",
+            "Nikkei 225": "Nikkei 225",
+            "Dow Jones Fut": "Dow Jones Futures",
+            "S&P 500": "S&P 500",
+            "Nasdaq": "Nasdaq",
+            "Hang Seng": "Hang Seng"
+        }
+        
+        # We loop through the exact list requested
+        key_order = ["GIFTNIFTY", "Nikkei 225", "Dow Jones Fut", "S&P 500", "Nasdaq", "Hang Seng"]
+        
+        for key in key_order:
+            if key in data:
+                val, chg = data[key]
+                name = display_map.get(key, key)
+                tweet_text += f"{name}: {val} ({chg})\n"
+                
+        # 3. Hashtags
+        tweet_text += "\n#GIFTNIFTY #Nifty #DowJones #Nasdaq $bitcoin"
+        # -----------------------------
 
         client.create_tweet(text=tweet_text, media_ids=[media.media_id_string])
         print("🚀 Tweet Posted Successfully!")
